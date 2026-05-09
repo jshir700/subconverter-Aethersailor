@@ -587,6 +587,7 @@ void operate_toml_kv_table(const std::vector<toml::table> &arr, const toml::valu
 
 void readTOMLConf(toml::value &root)
 {
+    std::cerr << "[DIAG] readTOMLConf entered" << std::endl;
     auto section_common = toml::find(root, "common");
     string_array default_url, insert_url;
 
@@ -799,23 +800,33 @@ void readConf()
     try
     {
         std::string prefdata = fileGet(global.prefPath, false);
+        std::cerr << "[DIAG] readConf: fileGet returned size=" << prefdata.size() << std::endl;
         if(prefdata.find("common:") != std::string::npos)
         {
+            std::cerr << "[DIAG] readConf: parsing YAML..." << std::endl;
             YAML::Node yaml = YAML::Load(prefdata);
             if(yaml.size() && yaml["common"])
+            {
+                std::cerr << "[DIAG] readConf: calling readYAMLConf..." << std::endl;
                 return readYAMLConf(yaml);
+            }
         }
+        std::cerr << "[DIAG] readConf: parsing TOML..." << std::endl;
         toml::value conf = parseToml(prefdata, global.prefPath);
         if(!conf.is_empty() && toml::find_or<int>(conf, "version", 0))
+        {
+            std::cerr << "[DIAG] readConf: calling readTOMLConf..." << std::endl;
             return readTOMLConf(conf);
+        }
+        std::cerr << "[DIAG] readConf: after TOML parse (didn't match)" << std::endl;
     }
     catch (YAML::Exception &e)
     {
-        //ignore yaml parse error
+        std::cerr << "[DIAG] readConf: YAML exception: " << e.what() << std::endl;
     }
     catch (toml::exception &e)
     {
-        //ignore toml parse error
+        std::cerr << "[DIAG] readConf: TOML exception: " << e.what() << std::endl;
     }
 
     INIReader ini;

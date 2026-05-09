@@ -10,8 +10,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  REGISTRY_IMAGE: aethersailor/subconverter
-  GHCR_IMAGE: ghcr.io/aethersailor/subconverter
+  REGISTRY_IMAGE: jshir700/subconverter-aethersailor
+  GHCR_IMAGE: ghcr.io/jshir700/subconverter-aethersailor
 
 jobs:
   build-dockerhub:

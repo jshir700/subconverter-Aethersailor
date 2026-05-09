@@ -790,51 +790,66 @@ void readConf()
 {
     guarded_mutex guard(gMutexConfigure);
     writeLog(0, "Loading preference settings...", LOG_LEVEL_INFO);
+    std::cerr << "[DIAG] readConf entered, prefPath=" << global.prefPath << std::endl;
 
     eraseElements(global.excludeRemarks);
     eraseElements(global.includeRemarks);
     eraseElements(global.customProxyGroups);
     eraseElements(global.customRulesets);
 
+    // STEP 1: try fileGet
+    std::string prefdata;
     try
     {
-        std::string prefdata = fileGet(global.prefPath, false);
-        writeLog(0, "readConf: prefPath='" + global.prefPath + "', data size=" + std::to_string(prefdata.size()), LOG_LEVEL_DEBUG);
-        if(prefdata.find("common:") != std::string::npos)
-        {
-            writeLog(0, "readConf: attempting YAML parse...", LOG_LEVEL_DEBUG);
-            YAML::Node yaml = YAML::Load(prefdata);
-            if(yaml.size() && yaml["common"])
-            {
-                writeLog(0, "readConf: YAML config detected, calling readYAMLConf...", LOG_LEVEL_DEBUG);
-                return readYAMLConf(yaml);
-            }
-        }
-        writeLog(0, "readConf: attempting TOML parse...", LOG_LEVEL_DEBUG);
-        toml::value conf = parseToml(prefdata, global.prefPath);
-        if(!conf.is_empty() && toml::find_or<int>(conf, "version", 0))
-        {
-            writeLog(0, "readConf: TOML config detected, calling readTOMLConf...", LOG_LEVEL_DEBUG);
-            return readTOMLConf(conf);
-        }
-    }
-    catch (YAML::Exception &e)
-    {
-        //ignore yaml parse error
-        writeLog(0, e.what(), LOG_LEVEL_DEBUG);
-        writeLog(0, "Unable to load preference settings as YAML.", LOG_LEVEL_DEBUG);
-    }
-    catch (toml::exception &e)
-    {
-        //ignore toml parse error
-        writeLog(0, e.what(), LOG_LEVEL_DEBUG);
-        writeLog(0, "Unable to load preference settings as TOML.", LOG_LEVEL_DEBUG);
+        std::cerr << "[DIAG] fileGet starting..." << std::endl;
+        prefdata = fileGet(global.prefPath, false);
+        std::cerr << "[DIAG] fileGet succeeded, size=" << prefdata.size() << std::endl;
     }
     catch (std::bad_alloc &e)
     {
-        writeLog(0, std::string("readConf: BAD_ALLOC during YAML/TOML parsing - ") + e.what(), LOG_LEVEL_FATAL);
-        writeLog(0, "readConf: prefPath='" + global.prefPath + "'", LOG_LEVEL_FATAL);
-        throw; // re-throw, still fatal
+        std::cerr << "[DIAG] fileGet threw BAD_ALLOC: " << e.what() << std::endl;
+        throw;
+    }
+
+    try
+    {
+        // STEP 2: check for YAML (common:)
+        if(prefdata.find("common:") != std::string::npos)
+        {
+            std::cerr << "[DIAG] attempting YAML parse..." << std::endl;
+            YAML::Node yaml = YAML::Load(prefdata);
+            if(yaml.size() && yaml["common"])
+            {
+                std::cerr << "[DIAG] YAML config detected, calling readYAMLConf..." << std::endl;
+                return readYAMLConf(yaml);
+            }
+            std::cerr << "[DIAG] YAML Load succeeded but no 'common' key, falling through to TOML" << std::endl;
+        }
+
+        // STEP 3: try TOML
+        std::cerr << "[DIAG] attempting TOML parse..." << std::endl;
+        toml::value conf = parseToml(prefdata, global.prefPath);
+        std::cerr << "[DIAG] TOML parse succeeded, is_empty=" << conf.is_empty() << std::endl;
+
+        if(!conf.is_empty() && toml::find_or<int>(conf, "version", 0))
+        {
+            std::cerr << "[DIAG] TOML config detected, calling readTOMLConf..." << std::endl;
+            return readTOMLConf(conf);
+        }
+        std::cerr << "[DIAG] TOML config has no/invalid version, falling through to INI" << std::endl;
+    }
+    catch (YAML::Exception &e)
+    {
+        std::cerr << "[DIAG] YAML exception (ignored): " << e.what() << std::endl;
+    }
+    catch (toml::exception &e)
+    {
+        std::cerr << "[DIAG] TOML exception (ignored): " << e.what() << std::endl;
+    }
+    catch (std::bad_alloc &e)
+    {
+        std::cerr << "[DIAG] BAD_ALLOC in YAML/TOML block: " << e.what() << std::endl;
+        throw;
     }
 
     writeLog(0, "readConf: attempting INI parse...", LOG_LEVEL_DEBUG);

@@ -799,15 +799,24 @@ void readConf()
     try
     {
         std::string prefdata = fileGet(global.prefPath, false);
+        writeLog(0, "readConf: prefPath='" + global.prefPath + "', data size=" + std::to_string(prefdata.size()), LOG_LEVEL_DEBUG);
         if(prefdata.find("common:") != std::string::npos)
         {
+            writeLog(0, "readConf: attempting YAML parse...", LOG_LEVEL_DEBUG);
             YAML::Node yaml = YAML::Load(prefdata);
             if(yaml.size() && yaml["common"])
+            {
+                writeLog(0, "readConf: YAML config detected, calling readYAMLConf...", LOG_LEVEL_DEBUG);
                 return readYAMLConf(yaml);
+            }
         }
+        writeLog(0, "readConf: attempting TOML parse...", LOG_LEVEL_DEBUG);
         toml::value conf = parseToml(prefdata, global.prefPath);
         if(!conf.is_empty() && toml::find_or<int>(conf, "version", 0))
+        {
+            writeLog(0, "readConf: TOML config detected, calling readTOMLConf...", LOG_LEVEL_DEBUG);
             return readTOMLConf(conf);
+        }
     }
     catch (YAML::Exception &e)
     {
@@ -821,11 +830,29 @@ void readConf()
         writeLog(0, e.what(), LOG_LEVEL_DEBUG);
         writeLog(0, "Unable to load preference settings as TOML.", LOG_LEVEL_DEBUG);
     }
+    catch (std::bad_alloc &e)
+    {
+        writeLog(0, std::string("readConf: BAD_ALLOC during YAML/TOML parsing - ") + e.what(), LOG_LEVEL_FATAL);
+        writeLog(0, "readConf: prefPath='" + global.prefPath + "'", LOG_LEVEL_FATAL);
+        throw; // re-throw, still fatal
+    }
+
+    writeLog(0, "readConf: attempting INI parse...", LOG_LEVEL_DEBUG);
 
     INIReader ini;
     ini.allow_dup_section_titles = true;
     //ini.do_utf8_to_gbk = true;
-    int retVal = ini.parse_file(global.prefPath);
+    writeLog(0, "readConf: parsing INI file '" + global.prefPath + "'...", LOG_LEVEL_DEBUG);
+    int retVal = INIREADER_EXCEPTION_NONE;
+    try
+    {
+        retVal = ini.parse_file(global.prefPath);
+    }
+    catch (std::bad_alloc &e)
+    {
+        writeLog(0, std::string("readConf: BAD_ALLOC during INI parse_file - ") + e.what(), LOG_LEVEL_FATAL);
+        throw;
+    }
     if(retVal != INIREADER_EXCEPTION_NONE)
     {
         writeLog(0, "Unable to load preference settings as INI. Reason: " + ini.get_last_error(), LOG_LEVEL_FATAL);

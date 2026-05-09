@@ -162,7 +162,20 @@ int main(int argc, char *argv[])
     signal(SIGINT, signal_handler);
 
     SetConsoleTitle("SubConverter " VERSION);
-    readConf();
+    try
+    {
+        readConf();
+    }
+    catch (std::exception &e)
+    {
+        writeLog(0, std::string("FATAL: Exception during config loading: ") + e.what(), LOG_LEVEL_FATAL);
+        return 1;
+    }
+    catch (...)
+    {
+        writeLog(0, "FATAL: Unknown exception during config loading.", LOG_LEVEL_FATAL);
+        return 1;
+    }
     //vfs::vfs_read("vfs.ini");
     if(!global.updateRulesetOnRequest)
         refreshRulesets(global.customRulesets, global.rulesetsContent);

@@ -41,24 +41,15 @@ inline std::string dump_to_pairs (const YAML::Node &node, const string_array &ex
     return result.erase(result.size() - 1);
 }
 
-/// Create a YAML scalar node with double-quoted output, preserving the raw value.
-/// This is used to ensure UA values like "mihomo/1.18.3" are output as
-///   header:
-///     User-Agent: "mihomo/1.18.3"
-/// instead of the default (unquoted) YAML output which would produce
-///   header:
-///     User-Agent: mihomo/1.18.3
-/// which is invalid YAML.
+// Cross-version double-quoting helper for yaml-cpp.
+// yaml-cpp 0.7+ supports EmitterStyle::DoubleQuoted via SetStyle().
+// yaml-cpp < 0.7 does not have DoubleQuoted in the EmitterStyle enum,
+// so the style is left as default (unquoted, which is still valid YAML).
 inline YAML::Node make_yaml_quoted_scalar(const std::string &value)
 {
-    YAML::Node node(YAML::NodeType::Scalar);
-    node.SetTag("?");
-#if YAML_CPP_API_VERSION >= 40000
-    // yaml-cpp 0.8+ uses EmitterStyle
-    node.SetStyle(YAML::EmitterStyle::DoubleQuoted);
-#else
-    // older yaml-cpp (<0.8) uses ScalarStyle
-    node.SetScalar(value);
+    YAML::Node node(value);
+#if defined(YAML_CPP_MAJOR_VERSION) && \
+    (YAML_CPP_MAJOR_VERSION > 0 || YAML_CPP_MINOR_VERSION >= 7)
     node.SetStyle(YAML::EmitterStyle::DoubleQuoted);
 #endif
     return node;

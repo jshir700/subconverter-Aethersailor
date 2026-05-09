@@ -31,6 +31,10 @@ struct Settings
     std::string custom_group;
     int logLevel = LOG_LEVEL_VERBOSE;
     long maxAllowedDownloadSize = 1048576L;
+
+    //ua & timeout
+    std::string user_agent;
+    long fetch_timeout = 15L;
     string_map aliases;
 
     //global variables for template

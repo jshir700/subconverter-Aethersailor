@@ -139,6 +139,7 @@ std::string getRuleset(RESPONSE_CALLBACK_ARGS)
     int *status_code = &response.status_code;
     /// type: 1 for Surge, 2 for Quantumult X, 3 for Clash domain rule-provider, 4 for Clash ipcidr rule-provider, 5 for Surge DOMAIN-SET, 6 for Clash classical ruleset
     std::string url = urlSafeBase64Decode(getUrlArg(argument, "url")), type = getUrlArg(argument, "type"), group = urlSafeBase64Decode(getUrlArg(argument, "group"));
+    std::string argUserAgent = getUrlArg(argument, "ua");
     std::string output_content, dummy;
     int type_int = to_int(type, 0);
 
@@ -148,18 +149,63 @@ std::string getRuleset(RESPONSE_CALLBACK_ARGS)
         return "Invalid request!";
     }
 
+    // Apply fetch_timeout from URL param if present
+    std::string argFetchTimeout = getUrlArg(argument, "fetch_timeout");
+    long saved_timeout = global.fetch_timeout;
+    if(!argFetchTimeout.empty())
+    {
+        long ft = to_int(argFetchTimeout, 0);
+        if(ft > 0) global.fetch_timeout = ft;
+    }
+
     std::string proxy = parseProxy(global.proxyRuleset);
     string_array vArray = split(url, "|");
     for(std::string &x : vArray)
         x.insert(0, "ruleset,");
     std::vector<RulesetContent> rca;
     RulesetConfigs confs = INIBinding::from<RulesetConfig>::from_ini(vArray);
+
+    writeLog(0, "[getruleset] url='" + url + "', type=" + type + ", group='" + group + "'", LOG_LEVEL_INFO);
+    writeLog(0, "[getruleset] incoming User-Agent header: '" +
+                   (request.headers.contains("User-Agent") ? request.headers.at("User-Agent") : "(none)") + "'",
+             LOG_LEVEL_INFO);
+
+    // Propagate incoming request's User-Agent to ruleset configs that don't have their own UA
+    std::string effective_ua = argUserAgent;
+    if(effective_ua.empty() && request.headers.contains("User-Agent"))
+        effective_ua = request.headers.at("User-Agent");
+    if(!effective_ua.empty())
+    {
+        for(auto &cfg : confs)
+        {
+            if(cfg.UserAgent.empty())
+            {
+                cfg.UserAgent = effective_ua;
+                writeLog(0, "[getruleset] propagated UA to ruleset config: url='" + cfg.Url + "'", LOG_LEVEL_INFO);
+            }
+        }
+    }
+
+    for(auto &cfg : confs)
+    {
+        writeLog(0, "[getruleset] config: url='" + cfg.Url + "', group='" + cfg.Group + "', UA='" +
+                       (cfg.UserAgent.empty() ? "(default)" : cfg.UserAgent) + "'",
+                 LOG_LEVEL_INFO);
+    }
+
     refreshRulesets(confs, rca);
     for(RulesetContent &x : rca)
     {
         std::string content = x.rule_content.get();
+        writeLog(0, "[getruleset] fetched content size=" + std::to_string(content.size()) +
+                       ", type=" + std::to_string(x.rule_type) +
+                       ", first_100='" + content.substr(0, 100) + "'",
+                 LOG_LEVEL_INFO);
         output_content += convertRuleset(content, x.rule_type);
     }
+
+    // Restore original fetch_timeout
+    global.fetch_timeout = saved_timeout;
 
     if(output_content.empty())
     {
@@ -594,6 +640,15 @@ std::string subconverter(RESPONSE_CALLBACK_ARGS)
         script_context_init(*ext.js_context);
     }
 
+    // Apply fetch_timeout from URL param if present
+    std::string argFetchTimeout = getUrlArg(argument, "fetch_timeout");
+    long saved_fetch_timeout = global.fetch_timeout;
+    if(!argFetchTimeout.empty())
+    {
+        long ft = to_int(argFetchTimeout, 0);
+        if(ft > 0) global.fetch_timeout = ft;
+    }
+
     //start parsing urls
     RegexMatchConfigs stream_temp = safe_get_streams(), time_temp = safe_get_times();
 
@@ -612,6 +667,7 @@ std::string subconverter(RESPONSE_CALLBACK_ARGS)
     parse_set.authorized = authorized;
     parse_set.request_header = &request.headers;
     parse_set.custom_user_agent = &argUserAgent;
+    parse_set.fetch_timeout = &global.fetch_timeout;
     parse_set.js_runtime = ext.js_runtime;
     parse_set.js_context = ext.js_context;
 

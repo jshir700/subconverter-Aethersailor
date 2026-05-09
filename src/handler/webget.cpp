@@ -131,7 +131,7 @@ static inline void curl_set_common_options(CURL *curl_handle, const char *url, c
     curl_easy_setopt(curl_handle, CURLOPT_MAXREDIRS, 20L);
     curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYHOST, 0L);
-    curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 15L);
+    curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, global.fetch_timeout);
     curl_easy_setopt(curl_handle, CURLOPT_COOKIEFILE, "");
     if(data)
     {
@@ -289,6 +289,18 @@ static std::string dataGet(const std::string &url)
     }
 }
 
+static std::string build_cache_key(const std::string &url, const std::string &proxy,
+                                   const string_icase_map *request_headers)
+{
+    std::string key = url + "|" + proxy;
+    if(request_headers)
+    {
+        for(auto &x : *request_headers)
+            key += "|" + x.first + ":" + x.second;
+    }
+    return getMD5(key);
+}
+
 std::string buildSocks5ProxyString(const std::string &addr, int port, const std::string &username, const std::string &password)
 {
     std::string authstr = username.size() && password.size() ? username + ":" + password + "@" : "";
@@ -310,7 +322,7 @@ std::string webGet(const std::string &url, const std::string &proxy, unsigned in
     if(cache_ttl > 0)
     {
         md("cache");
-        const std::string url_md5 = getMD5(url);
+        const std::string url_md5 = build_cache_key(url, proxy, request_headers);
         const std::string path = "cache/" + url_md5, path_header = path + "_header";
         struct stat result {};
         if(stat(path.data(), &result) == 0) // cache exist

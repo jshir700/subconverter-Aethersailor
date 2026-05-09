@@ -27,34 +27,23 @@ std::string fileGet(const std::string &path, bool scope_limit)
     std::FILE *fp = std::fopen(path.c_str(), "rb");
     if(fp)
     {
-        std::fseek(fp, 0, SEEK_END);
+        if(std::fseek(fp, 0, SEEK_END) != 0)
+        {
+            std::fclose(fp);
+            return "";
+        }
         long tot = std::ftell(fp);
-        /*
-        char *data = new char[tot + 1];
-        data[tot] = '\0';
+        if(tot <= 0)
+        {
+            std::fclose(fp);
+            return "";
+        }
+        content.resize(static_cast<size_t>(tot));
         std::rewind(fp);
-        std::fread(&data[0], 1, tot, fp);
-        std::fclose(fp);
-        content.assign(data, tot);
-        delete[] data;
-        */
-        content.resize(tot);
-        std::rewind(fp);
-        std::fread(&content[0], 1, tot, fp);
+        std::fread(&content[0], 1, static_cast<size_t>(tot), fp);
         std::fclose(fp);
     }
 
-    /*
-    std::stringstream sstream;
-    std::ifstream infile;
-    infile.open(path, std::ios::binary);
-    if(infile)
-    {
-        sstream<<infile.rdbuf();
-        infile.close();
-        content = sstream.str();
-    }
-    */
     return content;
 }
 

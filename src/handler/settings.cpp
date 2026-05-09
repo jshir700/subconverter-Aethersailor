@@ -790,84 +790,38 @@ void readConf()
 {
     guarded_mutex guard(gMutexConfigure);
     writeLog(0, "Loading preference settings...", LOG_LEVEL_INFO);
-    std::cerr << "[DIAG] readConf entered, prefPath=" << global.prefPath << std::endl;
 
     eraseElements(global.excludeRemarks);
     eraseElements(global.includeRemarks);
     eraseElements(global.customProxyGroups);
     eraseElements(global.customRulesets);
 
-    // STEP 1: try fileGet
-    std::string prefdata;
     try
     {
-        std::cerr << "[DIAG] fileGet starting..." << std::endl;
-        prefdata = fileGet(global.prefPath, false);
-        std::cerr << "[DIAG] fileGet succeeded, size=" << prefdata.size() << std::endl;
-    }
-    catch (std::bad_alloc &e)
-    {
-        std::cerr << "[DIAG] fileGet threw BAD_ALLOC: " << e.what() << std::endl;
-        throw;
-    }
-
-    try
-    {
-        // STEP 2: check for YAML (common:)
+        std::string prefdata = fileGet(global.prefPath, false);
         if(prefdata.find("common:") != std::string::npos)
         {
-            std::cerr << "[DIAG] attempting YAML parse..." << std::endl;
             YAML::Node yaml = YAML::Load(prefdata);
             if(yaml.size() && yaml["common"])
-            {
-                std::cerr << "[DIAG] YAML config detected, calling readYAMLConf..." << std::endl;
                 return readYAMLConf(yaml);
-            }
-            std::cerr << "[DIAG] YAML Load succeeded but no 'common' key, falling through to TOML" << std::endl;
         }
-
-        // STEP 3: try TOML
-        std::cerr << "[DIAG] attempting TOML parse..." << std::endl;
         toml::value conf = parseToml(prefdata, global.prefPath);
-        std::cerr << "[DIAG] TOML parse succeeded, is_empty=" << conf.is_empty() << std::endl;
-
         if(!conf.is_empty() && toml::find_or<int>(conf, "version", 0))
-        {
-            std::cerr << "[DIAG] TOML config detected, calling readTOMLConf..." << std::endl;
             return readTOMLConf(conf);
-        }
-        std::cerr << "[DIAG] TOML config has no/invalid version, falling through to INI" << std::endl;
     }
     catch (YAML::Exception &e)
     {
-        std::cerr << "[DIAG] YAML exception (ignored): " << e.what() << std::endl;
+        //ignore yaml parse error
     }
     catch (toml::exception &e)
     {
-        std::cerr << "[DIAG] TOML exception (ignored): " << e.what() << std::endl;
+        //ignore toml parse error
     }
-    catch (std::bad_alloc &e)
-    {
-        std::cerr << "[DIAG] BAD_ALLOC in YAML/TOML block: " << e.what() << std::endl;
-        throw;
-    }
-
-    writeLog(0, "readConf: attempting INI parse...", LOG_LEVEL_DEBUG);
 
     INIReader ini;
     ini.allow_dup_section_titles = true;
     //ini.do_utf8_to_gbk = true;
-    writeLog(0, "readConf: parsing INI file '" + global.prefPath + "'...", LOG_LEVEL_DEBUG);
-    int retVal = INIREADER_EXCEPTION_NONE;
-    try
-    {
-        retVal = ini.parse_file(global.prefPath);
-    }
-    catch (std::bad_alloc &e)
-    {
-        writeLog(0, std::string("readConf: BAD_ALLOC during INI parse_file - ") + e.what(), LOG_LEVEL_FATAL);
-        throw;
-    }
+    int retVal = ini.parse_file(global.prefPath);
     if(retVal != INIREADER_EXCEPTION_NONE)
     {
         writeLog(0, "Unable to load preference settings as INI. Reason: " + ini.get_last_error(), LOG_LEVEL_FATAL);

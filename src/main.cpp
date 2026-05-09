@@ -166,21 +166,13 @@ int main(int argc, char *argv[])
     {
         readConf();
     }
-    catch (std::bad_alloc &e)
-    {
-        std::cerr << "[DIAG] MAIN: std::bad_alloc during config loading: " << e.what() << std::endl;
-        writeLog(0, std::string("FATAL: std::bad_alloc during config loading: ") + e.what(), LOG_LEVEL_FATAL);
-        return 1;
-    }
     catch (std::exception &e)
     {
-        std::cerr << "[DIAG] MAIN: std::exception during config loading: " << e.what() << std::endl;
         writeLog(0, std::string("FATAL: Exception during config loading: ") + e.what(), LOG_LEVEL_FATAL);
         return 1;
     }
     catch (...)
     {
-        std::cerr << "[DIAG] MAIN: Unknown exception during config loading." << std::endl;
         writeLog(0, "FATAL: Unknown exception during config loading.", LOG_LEVEL_FATAL);
         return 1;
     }

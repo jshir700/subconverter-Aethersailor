@@ -587,7 +587,7 @@ void operate_toml_kv_table(const std::vector<toml::table> &arr, const toml::valu
 
 void readTOMLConf(toml::value &root)
 {
-    std::cerr << "[DIAG] readTOMLConf entered" << std::endl;
+    writeLog(0, "[DIAG] readTOMLConf entered", LOG_LEVEL_INFO);
     auto section_common = toml::find(root, "common");
     string_array default_url, insert_url;
 
@@ -800,33 +800,44 @@ void readConf()
     try
     {
         std::string prefdata = fileGet(global.prefPath, false);
-        std::cerr << "[DIAG] readConf: fileGet returned size=" << prefdata.size() << std::endl;
-        if(prefdata.find("common:") != std::string::npos)
+        writeLog(0, "[DIAG] readConf: fileGet returned size=" + std::to_string(prefdata.size()), LOG_LEVEL_INFO);
+        if(!prefdata.empty())
         {
-            std::cerr << "[DIAG] readConf: parsing YAML..." << std::endl;
-            YAML::Node yaml = YAML::Load(prefdata);
-            if(yaml.size() && yaml["common"])
+            if(prefdata.find("common:") != std::string::npos)
             {
-                std::cerr << "[DIAG] readConf: calling readYAMLConf..." << std::endl;
-                return readYAMLConf(yaml);
+                writeLog(0, "[DIAG] readConf: parsing YAML...", LOG_LEVEL_INFO);
+                YAML::Node yaml = YAML::Load(prefdata);
+                if(yaml.size() && yaml["common"])
+                {
+                    writeLog(0, "[DIAG] readConf: calling readYAMLConf...", LOG_LEVEL_INFO);
+                    return readYAMLConf(yaml);
+                }
             }
+            writeLog(0, "[DIAG] readConf: parsing TOML...", LOG_LEVEL_INFO);
+            toml::value conf = parseToml(prefdata, global.prefPath);
+            if(!conf.is_empty() && toml::find_or<int>(conf, "version", 0))
+            {
+                writeLog(0, "[DIAG] readConf: calling readTOMLConf...", LOG_LEVEL_INFO);
+                return readTOMLConf(conf);
+            }
+            writeLog(0, "[DIAG] readConf: after TOML parse (didn't match)", LOG_LEVEL_INFO);
         }
-        std::cerr << "[DIAG] readConf: parsing TOML..." << std::endl;
-        toml::value conf = parseToml(prefdata, global.prefPath);
-        if(!conf.is_empty() && toml::find_or<int>(conf, "version", 0))
+        else
         {
-            std::cerr << "[DIAG] readConf: calling readTOMLConf..." << std::endl;
-            return readTOMLConf(conf);
+            writeLog(0, "[DIAG] readConf: prefdata is empty, skipping YAML/TOML", LOG_LEVEL_INFO);
         }
-        std::cerr << "[DIAG] readConf: after TOML parse (didn't match)" << std::endl;
     }
     catch (YAML::Exception &e)
     {
-        std::cerr << "[DIAG] readConf: YAML exception: " << e.what() << std::endl;
+        writeLog(0, "[DIAG] readConf: YAML exception: " + std::string(e.what()), LOG_LEVEL_INFO);
     }
     catch (toml::exception &e)
     {
-        std::cerr << "[DIAG] readConf: TOML exception: " << e.what() << std::endl;
+        writeLog(0, "[DIAG] readConf: TOML exception: " + std::string(e.what()), LOG_LEVEL_INFO);
+    }
+    catch (std::exception &e)
+    {
+        writeLog(0, "[DIAG] readConf: std::exception: " + std::string(e.what()), LOG_LEVEL_WARNING);
     }
 
     INIReader ini;

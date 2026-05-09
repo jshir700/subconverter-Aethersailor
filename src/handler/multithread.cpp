@@ -71,7 +71,7 @@ std::shared_future<std::string> fetchFileAsync(const std::string &path, const st
         {
             string_icase_map headers;
             headers["User-Agent"] = user_agent;
-            retVal = std::async(std::launch::async, [path, proxy, cache_ttl, headers](){return webGet(path, proxy, cache_ttl, nullptr, &headers);});
+            retVal = std::async(std::launch::async, [path, proxy, cache_ttl, headers]() mutable {return webGet(path, proxy, cache_ttl, nullptr, &headers);});
         }
         else
             retVal = std::async(std::launch::async, [path, proxy, cache_ttl](){return webGet(path, proxy, cache_ttl);});

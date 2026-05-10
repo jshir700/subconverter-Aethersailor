@@ -1,0 +1,14 @@
+services:
+  subconverter:
+    image: jshir700/subconverter-aethersailor:latest
+    container_name: subconverter-aethersailor
+    ports:
+      - "48729:25500"
+    volumes:
+      - "./base/pref.toml:/base/pref.toml:ro"
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

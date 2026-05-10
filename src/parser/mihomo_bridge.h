@@ -37,6 +37,22 @@ std::vector<ProxyNode> parseSubscription(const std::string &subscription);
  */
 bool isMihomoParserAvailable();
 
+/**
+ * @brief Check if a parameter is supported for a given protocol
+ * @param protocol The proxy protocol name (e.g., "ss", "vmess")
+ * @param param The parameter name to check
+ * @return true if the parameter is supported
+ */
+bool isParamSupported(const std::string &protocol, const std::string &param);
+
+/**
+ * @brief Check if a parameter is hardcoded by mihomo (should not be overridden)
+ * @param protocol The proxy protocol name (e.g., "ss", "vmess")
+ * @param param The parameter name to check
+ * @return true if the parameter is hardcoded
+ */
+bool isParamHardcoded(const std::string &protocol, const std::string &param);
+
 } // namespace mihomo
 
 #endif // MIHOMO_BRIDGE_H

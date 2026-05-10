@@ -1,4 +1,5 @@
 #include "mihomo_bridge.h"
+#include "param_compat.h"
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <stdexcept>
@@ -118,6 +119,25 @@ bool isMihomoParserAvailable() {
     return false;
   }
   return false;
+}
+
+bool isParamSupported(const std::string &protocol, const std::string &param) {
+    auto proto_it = PARAM_COMPAT.find(protocol);
+    if (proto_it == PARAM_COMPAT.end())
+        return false;
+    const auto &params = proto_it->second;
+    return params.find(param) != params.end();
+}
+
+bool isParamHardcoded(const std::string &protocol, const std::string &param) {
+    auto proto_it = PARAM_COMPAT.find(protocol);
+    if (proto_it == PARAM_COMPAT.end())
+        return false;
+    const auto &params = proto_it->second;
+    auto param_it = params.find(param);
+    if (param_it == params.end())
+        return false;
+    return param_it->second.hardcoded;
 }
 
 } // namespace mihomo

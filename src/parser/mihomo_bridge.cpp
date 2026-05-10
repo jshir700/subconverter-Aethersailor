@@ -3,11 +3,13 @@
 #include <sstream>
 #include <stdexcept>
 
+#ifdef USE_MIHOMO_PARSER
 // Go library functions (generated from libconvert.h)
 extern "C" {
 char *ConvertSubscription(char *data);
 void FreeString(char *s);
 }
+#endif
 
 namespace mihomo {
 
@@ -27,6 +29,7 @@ std::string ProxyNode::toYAML() const {
 }
 
 std::vector<ProxyNode> parseSubscription(const std::string &subscription) {
+#ifdef USE_MIHOMO_PARSER
   std::vector<ProxyNode> nodes;
 
   // Call Go function
@@ -103,21 +106,17 @@ std::vector<ProxyNode> parseSubscription(const std::string &subscription) {
   FreeString(result);
 
   return nodes;
+#else
+  throw std::runtime_error("Mihomo parser not available: USE_MIHOMO_PARSER not defined");
+#endif
 }
 
 bool isMihomoParserAvailable() {
-  // Simple check: try to call the function with empty input
-  try {
-    char empty[] = "";
-    char *result = ConvertSubscription(empty);
-    if (result) {
-      FreeString(result);
-      return true;
-    }
-  } catch (...) {
-    return false;
-  }
+#ifdef USE_MIHOMO_PARSER
+  return true;
+#else
   return false;
+#endif
 }
 
 } // namespace mihomo

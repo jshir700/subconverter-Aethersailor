@@ -4,6 +4,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include "param_compat.h"
 
 
 namespace mihomo {

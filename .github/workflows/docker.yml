@@ -4,6 +4,10 @@ on:
   #   branches: [ master ]
   #   tags:
   #     - '**'
+  workflow_run:
+    workflows: ["Auto-merge Dependabot PRs"]
+    types:
+      - completed
   workflow_dispatch:
 
 concurrency:

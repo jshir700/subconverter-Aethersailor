@@ -1,9 +1,9 @@
 name: Publish Docker Image
 on:
-  push:
-    branches: [ master ]
-    tags:
-      - '**'
+  # push:
+  #   branches: [ master ]
+  #   tags:
+  #     - '**'
   workflow_dispatch:
 
 concurrency:

@@ -2,6 +2,7 @@
 #define SUBEXPORT_H_INCLUDED
 
 #include <string>
+#include <vector>
 
 #ifndef NO_JS_RUNTIME
 #include <quickjspp.hpp>
@@ -14,6 +15,21 @@
 #include "utils/string.h"
 #include "utils/yamlcpp_extra.h"
 #include "ruleconvert.h"
+
+struct ProxyProvider {
+    std::string name;
+    std::string tag;
+    std::string url;
+    uint32_t interval;
+    std::string filter;
+    std::string exclude_filter;
+    std::string path;
+    std::string proxy;
+    std::string user_agent;
+    int groupId;
+
+    ProxyProvider() : interval(3600), groupId(0) {}
+};
 
 struct extra_settings
 {
@@ -41,6 +57,8 @@ struct extra_settings
     std::string sort_script;
     std::string clash_proxies_style = "flow";
     std::string clash_proxy_groups_style = "flow";
+    bool use_proxy_provider = true;
+    std::vector<ProxyProvider> providers;
     bool authorized = false;
 
     extra_settings() = default;

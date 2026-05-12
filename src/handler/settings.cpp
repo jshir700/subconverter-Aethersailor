@@ -283,19 +283,19 @@ void refreshRulesets(RulesetConfigs &ruleset_list,
         // Apply &rules-provider= global default for rulesets WITHOUT explicit ,provider=
         // &rules-provider=true or non-false → generate rule-provider
         // &rules-provider=false → inline expand
-        // No &rules-provider= → leave to &classic= behavior
+        // No &rules-provider= → default: generate rule-provider
         if(!x.provider_explicit && !rules_provider.empty())
         {
             if(rules_provider != "false")
             {
-                // &rules-provider=true or non-false: generate rule-provider (ignore &classic=)
+                // &rules-provider=true or non-false: generate rule-provider
                 x.Provider = true;
                 x.provider_override = true;
                 writeLog(0, "  -> Globally set to provider mode by &rules-provider for ruleset '" + x.Url + "' (no explicit ,provider=).", LOG_LEVEL_INFO);
             }
             else
             {
-                // &rules-provider=false: inline expand (ignore &classic=)
+                // &rules-provider=false: inline expand
                 x.Provider = false;
                 x.provider_override = true;
                 writeLog(0, "  -> Globally inlined by &rules-provider=false for ruleset '" + x.Url + "' (no explicit ,provider=).", LOG_LEVEL_INFO);

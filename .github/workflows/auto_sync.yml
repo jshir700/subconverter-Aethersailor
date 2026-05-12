@@ -1,19 +1,26 @@
 name: Auto Sync from Upstream
 
-on:
-  schedule:
-    - cron: '0 2 * * *' # 每天 UTC 时间凌晨 2 点执行（北京时间上午 10 点）
-  workflow_dispatch: # 允许手动在 Actions 页面触发
+# ⚠️ 已禁用：用户选择手动从上游同步
+# 如需重新启用，取消下方注释即可
+# on:
+#   schedule:
+#     - cron: '0 2 * * *' # 每天 UTC 时间凌晨 2 点执行（北京时间上午 10 点）
+#   workflow_dispatch: # 允许手动在 Actions 页面触发
+on: workflow_dispatch
 
 jobs:
   sync-and-rebase:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 需要写入权限才能 push
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0 # 必须拉取完整历史，否则无法 rebase
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # 需要使用 PAT (Personal Access Token) 来获得 push 权限
+          # 若仓库 Actions 已设为 Read and write permissions，也可改用 GITHUB_TOKEN
+          token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Configure Git
         run: |

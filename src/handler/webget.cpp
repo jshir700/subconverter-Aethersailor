@@ -4,6 +4,7 @@
 //#include <mutex>
 #include <thread>
 #include <atomic>
+#include <future>
 
 #include <curl/curl.h>
 
@@ -31,11 +32,12 @@ std::mutex cache_rw_lock;
 RWLock cache_rw_lock;
 
 //std::string user_agent_str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36";
-static auto user_agent_str = "mihomo/1.19.24";
+static auto user_agent_str = "subconverter/" VERSION " cURL/" LIBCURL_VERSION;
 
 struct curl_progress_data
 {
     long size_limit = 0L;
+    long timeout = 0L; // 0 = use global.fetch_timeout default
 };
 
 static inline void curl_init()
@@ -120,6 +122,21 @@ static int logger(CURL *handle, curl_infotype type, char *data, size_t size, voi
     return 0;
 }
 
+// Thread-local CURL handle pool for connection reuse.
+// Each thread gets its own persistent handle, avoiding curl_easy_init/cleanup
+// overhead and allowing TCP/TLS connection reuse across requests.
+static CURL* get_thread_local_curl_handle()
+{
+    thread_local CURL* handle = nullptr;
+    if (!handle) {
+        curl_init();
+        handle = curl_easy_init();
+    } else {
+        curl_easy_reset(handle);
+    }
+    return handle;
+}
+
 static inline void curl_set_common_options(CURL *curl_handle, const char *url, curl_progress_data *data)
 {
     curl_easy_setopt(curl_handle, CURLOPT_URL, url);
@@ -131,8 +148,17 @@ static inline void curl_set_common_options(CURL *curl_handle, const char *url, c
     curl_easy_setopt(curl_handle, CURLOPT_MAXREDIRS, 20L);
     curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYHOST, 0L);
-    curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, global.fetch_timeout);
+    long timeout = data && data->timeout > 0 ? data->timeout : global.fetch_timeout;
+    curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, timeout);
     curl_easy_setopt(curl_handle, CURLOPT_COOKIEFILE, "");
+    // Enable TCP keepalive for long-lived connections
+    curl_easy_setopt(curl_handle, CURLOPT_TCP_KEEPALIVE, 1L);
+    curl_easy_setopt(curl_handle, CURLOPT_TCP_KEEPIDLE, 60L);
+    curl_easy_setopt(curl_handle, CURLOPT_TCP_KEEPINTVL, 30L);
+    // Cache DNS results for 5 minutes to avoid redundant lookups
+    curl_easy_setopt(curl_handle, CURLOPT_DNS_CACHE_TIMEOUT, 300L);
+    // Allow HTTP/1.1 keep-alive connection reuse via the connection cache
+    curl_easy_setopt(curl_handle, CURLOPT_FORBID_REUSE, 0L);
     if(data)
     {
         if(data->size_limit)
@@ -145,15 +171,13 @@ static inline void curl_set_common_options(CURL *curl_handle, const char *url, c
 //static std::string curlGet(const std::string &url, const std::string &proxy, std::string &response_headers, CURLcode &return_code, const string_map &request_headers)
 static int curlGet(const FetchArgument &argument, FetchResult &result)
 {
-    CURL *curl_handle;
     std::string *data = result.content, new_url = argument.url;
     curl_slist *header_list = nullptr;
     defer(curl_slist_free_all(header_list);)
     long retVal;
 
-    curl_init();
-
-    curl_handle = curl_easy_init();
+    // Use thread-local CURL handle for connection reuse (avoids TCP/TLS handshake overhead)
+    CURL *curl_handle = get_thread_local_curl_handle();
     if(!argument.proxy.empty())
     {
         if(startsWith(argument.proxy, "cors:"))
@@ -166,8 +190,9 @@ static int curlGet(const FetchArgument &argument, FetchResult &result)
     }
     curl_progress_data limit;
     limit.size_limit = global.maxAllowedDownloadSize;
+    limit.timeout = argument.timeout;
     curl_set_common_options(curl_handle, new_url.data(), &limit);
-
+    header_list = curl_slist_append(header_list, "Content-Type: application/json;charset=utf-8");
     if(argument.request_headers)
     {
         for(auto &x : *argument.request_headers)
@@ -178,7 +203,8 @@ static int curlGet(const FetchArgument &argument, FetchResult &result)
         if(!argument.request_headers->contains("User-Agent"))
             curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, user_agent_str);
     }
-
+    header_list = curl_slist_append(header_list, "SubConverter-Request: 1");
+    header_list = curl_slist_append(header_list, "SubConverter-Version: " VERSION);
     if(header_list)
         curl_easy_setopt(curl_handle, CURLOPT_HTTPHEADER, header_list);
 
@@ -260,7 +286,7 @@ static int curlGet(const FetchArgument &argument, FetchResult &result)
         curl_slist_free_all(cookies);
     }
 
-    curl_easy_cleanup(curl_handle);
+    // Handle is thread-local and reused; DO NOT cleanup here — avoids TLS handshake overhead
 
     if(data && !argument.keep_resp_on_fail)
     {
@@ -273,7 +299,6 @@ static int curlGet(const FetchArgument &argument, FetchResult &result)
                      LOG_LEVEL_WARNING);
             data->clear();
         }
-        data->shrink_to_fit();
     }
 
     return *result.status_code;
@@ -296,18 +321,6 @@ static std::string dataGet(const std::string &url)
     }
 }
 
-static std::string build_cache_key(const std::string &url, const std::string &proxy,
-                                   const string_icase_map *request_headers)
-{
-    std::string key = url + "|" + proxy;
-    if(request_headers)
-    {
-        for(auto &x : *request_headers)
-            key += "|" + x.first + ":" + x.second;
-    }
-    return getMD5(key);
-}
-
 std::string buildSocks5ProxyString(const std::string &addr, int port, const std::string &username, const std::string &password)
 {
     std::string authstr = username.size() && password.size() ? username + ":" + password + "@" : "";
@@ -315,12 +328,39 @@ std::string buildSocks5ProxyString(const std::string &addr, int port, const std:
     return proxystr;
 }
 
-std::string webGet(const std::string &url, const std::string &proxy, unsigned int cache_ttl, std::string *response_headers, string_icase_map *request_headers)
+static std::string build_cache_key(const std::string &url, const std::string &proxy,
+                                   const string_icase_map *request_headers)
+{
+    if(proxy.empty() && (!request_headers || request_headers->empty()))
+        return getMD5(url);
+
+    std::string identity = "url:" + std::to_string(url.size()) + ":" + url;
+    identity += "\nproxy:" + std::to_string(proxy.size()) + ":" + proxy;
+    identity += "\nheaders:";
+    if(request_headers)
+    {
+        for(const auto &header : *request_headers)
+        {
+            std::string name = toLower(header.first);
+            identity += "\n" + name + ":" + std::to_string(header.second.size()) + ":" +
+                        header.second;
+        }
+        if(!request_headers->contains("User-Agent"))
+        {
+            std::string default_user_agent = user_agent_str;
+            identity += "\nuser-agent:" + std::to_string(default_user_agent.size()) + ":" +
+                        default_user_agent;
+        }
+    }
+    return getMD5(identity);
+}
+
+std::string webGet(const std::string &url, const std::string &proxy, unsigned int cache_ttl, std::string *response_headers, string_icase_map *request_headers, long timeout)
 {
     int return_code = 0;
     std::string content;
 
-    FetchArgument argument {HTTP_GET, url, proxy, nullptr, request_headers, nullptr, cache_ttl};
+    FetchArgument argument {HTTP_GET, url, proxy, nullptr, request_headers, nullptr, cache_ttl, false, timeout};
     FetchResult fetch_res {&return_code, &content, response_headers, nullptr};
 
     if (startsWith(url, "data:"))
@@ -351,14 +391,19 @@ std::string webGet(const std::string &url, const std::string &proxy, unsigned in
             writeLog(0, "CACHE NOT EXIST: '" + url + "', creating new cache.");
         //content = curlGet(url, proxy, response_headers, return_code); // try to fetch data
         curlGet(argument, fetch_res);
-        if(return_code == 200) // success, save new cache
+        if(return_code == 200) // success, save new cache asynchronously
         {
-            //guarded_mutex guard(cache_rw_lock);
-            cache_rw_lock.writeLock();
-            defer(cache_rw_lock.writeUnlock();)
-            fileWrite(path, content, true);
-            if(response_headers)
-                fileWrite(path_header, *response_headers, true);
+            // Capture copies of data for the async write (fire-and-forget)
+            std::string cache_content = content;
+            std::string cache_path = path;
+            std::string cache_path_header = path_header;
+            std::string cache_response_headers = response_headers ? *response_headers : "";
+            bool has_response_headers = response_headers != nullptr;
+            std::thread([cache_content, cache_path, cache_path_header, cache_response_headers, has_response_headers]() {
+                fileWrite(cache_path, cache_content, true);
+                if(has_response_headers)
+                    fileWrite(cache_path_header, cache_response_headers, true);
+            }).detach();
         }
         else
         {
@@ -390,29 +435,29 @@ void flushCache()
     operateFiles("cache", [](const std::string &file){ remove(("cache/" + file).data()); return 0; });
 }
 
-int webPost(const std::string &url, const std::string &data, const std::string &proxy, const string_icase_map &request_headers, std::string *retData)
+int webPost(const std::string &url, const std::string &data, const std::string &proxy, const string_icase_map &request_headers, std::string *retData, long timeout)
 {
     //return curlPost(url, data, proxy, request_headers, retData);
     int return_code = 0;
-    FetchArgument argument {HTTP_POST, url, proxy, &data, &request_headers, nullptr, 0, true};
+    FetchArgument argument {HTTP_POST, url, proxy, &data, &request_headers, nullptr, 0, true, timeout};
     FetchResult fetch_res {&return_code, retData, nullptr, nullptr};
     return webGet(argument, fetch_res);
 }
 
-int webPatch(const std::string &url, const std::string &data, const std::string &proxy, const string_icase_map &request_headers, std::string *retData)
+int webPatch(const std::string &url, const std::string &data, const std::string &proxy, const string_icase_map &request_headers, std::string *retData, long timeout)
 {
     //return curlPatch(url, data, proxy, request_headers, retData);
     int return_code = 0;
-    FetchArgument argument {HTTP_PATCH, url, proxy, &data, &request_headers, nullptr, 0, true};
+    FetchArgument argument {HTTP_PATCH, url, proxy, &data, &request_headers, nullptr, 0, true, timeout};
     FetchResult fetch_res {&return_code, retData, nullptr, nullptr};
     return webGet(argument, fetch_res);
 }
 
-int webHead(const std::string &url, const std::string &proxy, const string_icase_map &request_headers, std::string &response_headers)
+int webHead(const std::string &url, const std::string &proxy, const string_icase_map &request_headers, std::string &response_headers, long timeout)
 {
     //return curlHead(url, proxy, request_headers, response_headers);
     int return_code = 0;
-    FetchArgument argument {HTTP_HEAD, url, proxy, nullptr, &request_headers, nullptr, 0};
+    FetchArgument argument {HTTP_HEAD, url, proxy, nullptr, &request_headers, nullptr, 0, false, timeout};
     FetchResult fetch_res {&return_code, nullptr, &response_headers, nullptr};
     return webGet(argument, fetch_res);
 }

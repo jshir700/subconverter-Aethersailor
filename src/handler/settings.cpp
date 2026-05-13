@@ -15,6 +15,9 @@
 
 //multi-thread lock
 std::mutex gMutexConfigure;
+// Last modification time tracking for readConf double-check
+static time_t gConfigMtime = 0;
+static bool gConfigLoaded = false;
 
 Settings global;
 
@@ -228,7 +231,7 @@ void readRuleset(YAML::Node node, string_array &dest, bool scope_limit = true)
 {
     for(auto && object : node)
     {
-        std::string strLine, name, url, group, interval, ua_value;
+        std::string strLine, name, url, group, interval, ua;
         object["import"] >>= name;
         if(!name.empty())
         {
@@ -239,14 +242,14 @@ void readRuleset(YAML::Node node, string_array &dest, bool scope_limit = true)
         object["group"] >>= group;
         object["rule"] >>= name;
         object["interval"] >>= interval;
-        object["ua"] >>= ua_value;
+        object["ua"] >>= ua;
         if(!url.empty())
         {
             strLine = group + "," + url;
             if(!interval.empty())
                 strLine += "," + interval;
-            if(!ua_value.empty())
-                strLine += ",ua=" + ua_value;
+            if(!ua.empty())
+                strLine += ",ua=" + ua;
         }
         else if(!name.empty())
             strLine = group + ",[]" + name;
@@ -291,19 +294,19 @@ void refreshRulesets(RulesetConfigs &ruleset_list,
         // Apply &rules-provider= global default for rulesets WITHOUT explicit ,provider=
         // &rules-provider=true or non-false → generate rule-provider
         // &rules-provider=false → inline expand
-        // No &rules-provider= → default: generate rule-provider
+        // No &rules-provider= → leave to &classic= behavior
         if(!x.provider_explicit && !rules_provider.empty())
         {
             if(rules_provider != "false")
             {
-                // &rules-provider=true or non-false: generate rule-provider
+                // &rules-provider=true or non-false: generate rule-provider (ignore &classic=)
                 x.Provider = true;
                 x.provider_override = true;
                 writeLog(0, "  -> Globally set to provider mode by &rules-provider for ruleset '" + x.Url + "' (no explicit ,provider=).", LOG_LEVEL_INFO);
             }
             else
             {
-                // &rules-provider=false: inline expand
+                // &rules-provider=false: inline expand (ignore &classic=)
                 x.Provider = false;
                 x.provider_override = true;
                 writeLog(0, "  -> Globally inlined by &rules-provider=false for ruleset '" + x.Url + "' (no explicit ,provider=).", LOG_LEVEL_INFO);
@@ -634,6 +637,8 @@ void readYAMLConf(YAML::Node &node)
         node["advanced"]["max_allowed_rulesets"] >> global.maxAllowedRulesets;
         node["advanced"]["max_allowed_rules"] >> global.maxAllowedRules;
         node["advanced"]["max_allowed_download_size"] >> global.maxAllowedDownloadSize;
+        node["advanced"]["fetch_timeout"] >> global.fetch_timeout;
+        node["advanced"]["user_agent"] >> global.user_agent;
         if(node["advanced"]["enable_cache"].IsDefined())
         {
             if(safe_as<bool>(node["advanced"]["enable_cache"]))
@@ -671,7 +676,6 @@ void operate_toml_kv_table(const std::vector<toml::table> &arr, const toml::valu
 
 void readTOMLConf(toml::value &root)
 {
-    writeLog(0, "[DIAG] readTOMLConf entered", LOG_LEVEL_INFO);
     auto section_common = toml::find(root, "common");
     string_array default_url, insert_url;
 
@@ -822,6 +826,8 @@ void readTOMLConf(toml::value &root)
                   "max_allowed_rulesets", global.maxAllowedRulesets,
                   "max_allowed_rules", global.maxAllowedRules,
                   "max_allowed_download_size", global.maxAllowedDownloadSize,
+                  "fetch_timeout", global.fetch_timeout,
+                  "user_agent", global.user_agent,
                   "enable_cache", enable_cache,
                   "cache_subscription", cache_subscription,
                   "cache_config", cache_config,
@@ -873,7 +879,27 @@ void readTOMLConf(toml::value &root)
 
 void readConf()
 {
+    // Double-check lock: check file mtime before acquiring the heavy mutex
+    struct stat configStat {};
+    bool needsReload = true;
+    if (gConfigLoaded && stat(global.prefPath.data(), &configStat) == 0) {
+        if (configStat.st_mtime == gConfigMtime) {
+            needsReload = false;
+        }
+    }
+
+    if (!needsReload)
+        return;
+
     guarded_mutex guard(gMutexConfigure);
+
+    // Second check after acquiring lock (another thread may have reloaded already)
+    if (gConfigLoaded && stat(global.prefPath.data(), &configStat) == 0) {
+        if (configStat.st_mtime == gConfigMtime) {
+            return;
+        }
+    }
+
     writeLog(0, "Loading preference settings...", LOG_LEVEL_INFO);
 
     eraseElements(global.excludeRemarks);
@@ -884,44 +910,37 @@ void readConf()
     try
     {
         std::string prefdata = fileGet(global.prefPath, false);
-        writeLog(0, "[DIAG] readConf: fileGet returned size=" + std::to_string(prefdata.size()), LOG_LEVEL_INFO);
-        if(!prefdata.empty())
+        if(prefdata.find("common:") != std::string::npos)
         {
-            if(prefdata.find("common:") != std::string::npos)
-            {
-                writeLog(0, "[DIAG] readConf: parsing YAML...", LOG_LEVEL_INFO);
-                YAML::Node yaml = YAML::Load(prefdata);
-                if(yaml.size() && yaml["common"])
-                {
-                    writeLog(0, "[DIAG] readConf: calling readYAMLConf...", LOG_LEVEL_INFO);
-                    return readYAMLConf(yaml);
-                }
+            YAML::Node yaml = YAML::Load(prefdata);
+            if(yaml.size() && yaml["common"]) {
+                // Update mtime on success
+                if (stat(global.prefPath.data(), &configStat) == 0)
+                    gConfigMtime = configStat.st_mtime;
+                gConfigLoaded = true;
+                return readYAMLConf(yaml);
             }
-            writeLog(0, "[DIAG] readConf: parsing TOML...", LOG_LEVEL_INFO);
-            toml::value conf = parseToml(prefdata, global.prefPath);
-            if(!conf.is_empty() && toml::find_or<int>(conf, "version", 0))
-            {
-                writeLog(0, "[DIAG] readConf: calling readTOMLConf...", LOG_LEVEL_INFO);
-                return readTOMLConf(conf);
-            }
-            writeLog(0, "[DIAG] readConf: after TOML parse (didn't match)", LOG_LEVEL_INFO);
         }
-        else
-        {
-            writeLog(0, "[DIAG] readConf: prefdata is empty, skipping YAML/TOML", LOG_LEVEL_INFO);
+        toml::value conf = parseToml(prefdata, global.prefPath);
+        if(!conf.is_empty() && toml::find_or<int>(conf, "version", 0)) {
+            // Update mtime on success
+            if (stat(global.prefPath.data(), &configStat) == 0)
+                gConfigMtime = configStat.st_mtime;
+            gConfigLoaded = true;
+            return readTOMLConf(conf);
         }
     }
     catch (YAML::Exception &e)
     {
-        writeLog(0, "[DIAG] readConf: YAML exception: " + std::string(e.what()), LOG_LEVEL_INFO);
+        //ignore yaml parse error
+        writeLog(0, e.what(), LOG_LEVEL_DEBUG);
+        writeLog(0, "Unable to load preference settings as YAML.", LOG_LEVEL_DEBUG);
     }
     catch (toml::exception &e)
     {
-        writeLog(0, "[DIAG] readConf: TOML exception: " + std::string(e.what()), LOG_LEVEL_INFO);
-    }
-    catch (std::exception &e)
-    {
-        writeLog(0, "[DIAG] readConf: std::exception: " + std::string(e.what()), LOG_LEVEL_WARNING);
+        //ignore toml parse error
+        writeLog(0, e.what(), LOG_LEVEL_DEBUG);
+        writeLog(0, "Unable to load preference settings as TOML.", LOG_LEVEL_DEBUG);
     }
 
     INIReader ini;
@@ -1157,6 +1176,8 @@ void readConf()
     ini.get_number_if_exist("max_allowed_rulesets", global.maxAllowedRulesets);
     ini.get_number_if_exist("max_allowed_rules", global.maxAllowedRules);
     ini.get_number_if_exist("max_allowed_download_size", global.maxAllowedDownloadSize);
+    ini.get_number_if_exist("fetch_timeout", global.fetch_timeout);
+    ini.get_if_exist("user_agent", global.user_agent);
     if(ini.item_exist("enable_cache"))
     {
         if(ini.get_bool("enable_cache"))
@@ -1175,6 +1196,11 @@ void readConf()
     ini.get_bool_if_exist("script_clean_context", global.scriptCleanContext);
     ini.get_bool_if_exist("async_fetch_ruleset", global.asyncFetchRuleset);
     ini.get_bool_if_exist("skip_failed_links", global.skipFailedLinks);
+
+    // Update mtime on INI success path (for double-check lock optimization)
+    if (stat(global.prefPath.data(), &configStat) == 0)
+        gConfigMtime = configStat.st_mtime;
+    gConfigLoaded = true;
 
     writeLog(0, "Load preference settings in INI format completed.", LOG_LEVEL_INFO);
 }

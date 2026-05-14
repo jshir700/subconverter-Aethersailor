@@ -384,14 +384,14 @@ int renderClashScript(YAML::Node &base_rule, std::vector<RulesetContent> &rulese
             }
             if(startsWith(strLine, "FINAL"))
                 strLine.replace(0, 5, "MATCH");
-            strLine += "," + rule_group;
-            if(count_least(strLine, ',', 3))
-                strLine = regReplace(strLine, "^(.*?,.*?)(,.*)(,.*)$", "$1$3$2");
             if(dedup) {
                 std::string key = getRuleKey(strLine);
                 if(!dedupKeys.emplace(key).second)
                     continue;
             }
+            strLine += "," + rule_group;
+            if(count_least(strLine, ',', 3))
+                strLine = regReplace(strLine, "^(.*?,.*?)(,.*)(,.*)$", "$1$3$2");
             rules.emplace_back(std::move(strLine));
             continue;
         }
@@ -422,14 +422,14 @@ int renderClashScript(YAML::Node &base_rule, std::vector<RulesetContent> &rulese
                             continue;
                         strLine = trimWhitespace(strLine, true, true);
                         if(strLine.empty()) continue;
-                        strLine += "," + rule_group;
-                        if(count_least(strLine, ',', 3))
-                            strLine = regReplace(strLine, "^(.*?,.*?)(,.*)(,.*)$", "$1$3$2");
                         if(dedup) {
                             std::string key = getRuleKey(strLine);
                             if(!dedupKeys.emplace(key).second)
                                 continue;
                         }
+                        strLine += "," + rule_group;
+                        if(count_least(strLine, ',', 3))
+                            strLine = regReplace(strLine, "^(.*?,.*?)(,.*)(,.*)$", "$1$3$2");
                         rules.emplace_back(std::move(strLine));
                     }
                     continue;
@@ -571,14 +571,14 @@ int renderClashScript(YAML::Node &base_rule, std::vector<RulesetContent> &rulese
                     // No RULE-SET entries are generated; all rules are expanded inline.
                     strLine = trimWhitespace(strLine, true, true);
                     if(strLine.empty()) continue;
-                    strLine += "," + rule_group;
-                    if(count_least(strLine, ',', 3))
-                        strLine = regReplace(strLine, "^(.*?,.*?)(,.*)(,.*)$", "$1$3$2");
                     if(dedup) {
                         std::string key = getRuleKey(strLine);
                         if(!dedupKeys.emplace(key).second)
                             continue;
                     }
+                    strLine += "," + rule_group;
+                    if(count_least(strLine, ',', 3))
+                        strLine = regReplace(strLine, "^(.*?,.*?)(,.*)(,.*)$", "$1$3$2");
                     rules.emplace_back(std::move(strLine));
                 }
                 else if(startsWith(strLine, "DOMAIN-KEYWORD,"))

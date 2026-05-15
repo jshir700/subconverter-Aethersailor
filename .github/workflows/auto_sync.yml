@@ -69,7 +69,7 @@ jobs:
           
           if [ -n "$LATEST_TAG" ]; then
             # 因为 rebase 改变了 hash，原有的 tag 可能还在老 hash 上
-            # 我们强制把上游最新的 tag 移动到我们包含“防屏蔽”修改的最新 master 上
+            # 我们强制把上游最新的 tag 移动到我们包含"防屏蔽"修改的最新 master 上
             echo "Applying upstream latest tag ($LATEST_TAG) to local master..."
             git tag -f "$LATEST_TAG" HEAD
             

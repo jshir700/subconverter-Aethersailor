@@ -12,9 +12,10 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends git build-essential && \
     rm -rf /var/lib/apt/lists/*
 
-COPY bridge/converter.go bridge/
-
-RUN cd bridge && go mod init subconverter/bridge
+# Copy bridge module for scheme generation and mihomo_helper build
+COPY bridge/go.mod bridge/go.sum bridge/
+COPY bridge/mihomo_helper.go bridge/
+COPY scripts/ scripts/
 
 RUN echo "MIHOMO_CACHE_BUST=$MIHOMO_CACHE_BUST" && \
     cd bridge && go get github.com/metacubex/mihomo@${MIHOMO_REF}
@@ -23,19 +24,15 @@ RUN cd bridge && go get -u all
 
 RUN cd bridge && go mod tidy
 
-COPY scripts/ scripts/
-RUN go run scripts/generate_schemes.go mihomo_schemes.h
-RUN go run scripts/generate_param_compat.go -o param_compat.h
+RUN echo "==> Generating mihomo_schemes.h and param_compat.h from mihomo source" && \
+    go run scripts/generate_schemes.go mihomo_schemes.h && \
+    go run scripts/generate_param_compat.go -o param_compat.h
 
-RUN echo "==> Building for $TARGETARCH with c-shared mode (musl compatible)" && \
-    cd bridge && CGO_ENABLED=1 \
-    go build \
-    -trimpath \
-    -buildmode=c-shared \
-    -o libmihomo.so \
-    .
+RUN echo "==> Building mihomo_helper for $TARGETARCH (subprocess mode)" && \
+    cd bridge && CGO_ENABLED=0 \
+    go build -v -ldflags="-s -w" -o mihomo_helper mihomo_helper.go
 
-RUN ls -lh bridge/libmihomo.so bridge/libmihomo.h
+RUN ls -lh bridge/mihomo_helper mihomo_schemes.h param_compat.h
 
 # ========== C++ BUILD STAGE ==========
 FROM debian:latest AS builder
@@ -87,17 +84,18 @@ RUN set -xe && \
     cmake -DCMAKE_CXX_STANDARD=11 . && \
     make install -j ${THREADS}
 
-# Copy Go shared library and module files from go-builder stage
-COPY --from=go-builder /build/bridge/libmihomo.so /usr/lib/
-COPY --from=go-builder /build/bridge/libmihomo.h /usr/include/
-COPY --from=go-builder /build/bridge/go.mod /src/bridge/go.mod
-COPY --from=go-builder /build/bridge/go.sum /src/bridge/go.sum
+# Copy pre-built mihomo_helper and generated headers from go-builder
+COPY --from=go-builder /build/bridge/mihomo_helper /usr/bin/mihomo_helper
+COPY --from=go-builder /build/mihomo_schemes.h /tmp/mihomo_schemes.h
+COPY --from=go-builder /build/param_compat.h /tmp/param_compat.h
 
 # Build subconverter from THIS repository source
 WORKDIR /src
 COPY . /src
-COPY --from=go-builder /build/mihomo_schemes.h /src/src/parser/mihomo_schemes.h
-COPY --from=go-builder /build/param_compat.h /src/src/parser/param_compat.h
+
+# Replace checked-in headers with freshly generated ones
+RUN cp /tmp/mihomo_schemes.h src/parser/mihomo_schemes.h && \
+    cp /tmp/param_compat.h src/parser/param_compat.h
 
 # Download latest header-only libraries
 RUN set -xe && \
@@ -117,9 +115,6 @@ RUN set -xe && \
     [ -n "${SHA}" ] && sed -i "s/#define BUILD_ID \"\"/#define BUILD_ID \"${SHA}\"/ " src/version.h || true && \
     [ -n "${VERSION}" ] && sed -i "s/#define VERSION \"dev\"/#define VERSION \"${VERSION}\"/" src/version.h || true && \
     [ -n "${BUILD_DATE}" ] && sed -i "s/#define BUILD_DATE \"\"/#define BUILD_DATE \"${BUILD_DATE}\"/" src/version.h || true && \
-    mkdir -p bridge && \
-    cp /usr/lib/libmihomo.so bridge/ && \
-    cp /usr/include/libmihomo.h bridge/ && \
     export PATH="/usr/lib/ccache:$PATH" && \
     export CCACHE_DIR=/tmp/ccache && \
     export CCACHE_COMPILERCHECK=content && \
@@ -130,37 +125,6 @@ RUN set -xe && \
     -DCMAKE_POSITION_INDEPENDENT_CODE=OFF \
     . && \
     ninja -j ${THREADS}
-
-# Collect glibc runtime dependencies
-RUN set -xe && \
-    mkdir -p /runtime-libs && \
-    ldd /src/subconverter /usr/lib/libmihomo.so | \
-      awk '{for (i=1; i<=NF; i++) if ($i ~ "^/") print $i}' | \
-      sort -u | \
-      while read -r lib; do \
-        if [ -e "$lib" ]; then \
-          mkdir -p "/runtime-libs$(dirname "$lib")" && \
-          cp -aL "$lib" "/runtime-libs$lib"; \
-        fi; \
-      done && \
-    for loader in /lib64/ld-linux-x86-64.so.2 /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 /lib/aarch64-linux-gnu/ld-linux-aarch64.so.1; do \
-      if [ -e "$loader" ]; then \
-        mkdir -p "/runtime-libs$(dirname "$loader")" && \
-        cp -aL "$loader" "/runtime-libs$loader"; \
-      fi; \
-    done && \
-    libc_path="$(ldd /src/subconverter | awk '$1 == "libc.so.6" {print $3; exit}')" && \
-    libc_dir="$(dirname "${libc_path:-/lib/x86_64-linux-gnu/libc.so.6}")" && \
-    for extra in libnss_dns.so.2 libnss_files.so.2 libnss_compat.so.2 libresolv.so.2; do \
-      if [ -e "$libc_dir/$extra" ]; then \
-        mkdir -p "/runtime-libs$libc_dir" && \
-        cp -aL "$libc_dir/$extra" "/runtime-libs$libc_dir/$extra"; \
-      fi; \
-    done && \
-    if [ -f /etc/nsswitch.conf ]; then \
-      mkdir -p /runtime-libs/etc && \
-      cp -aL /etc/nsswitch.conf /runtime-libs/etc/nsswitch.conf; \
-    fi
 
 # ========== FINAL STAGE ==========
 FROM alpine:latest
@@ -182,15 +146,12 @@ LABEL \
 RUN apk add --no-cache ca-certificates
 
 COPY --from=builder /src/subconverter /usr/bin/subconverter
+COPY --from=builder /usr/bin/mihomo_helper /usr/bin/mihomo_helper
 COPY --from=builder /src/base /base/
-COPY --from=builder /usr/lib/libmihomo.so /usr/lib/
-COPY --from=builder /runtime-libs/ /
-COPY --from=builder /etc/nsswitch.conf /etc/nsswitch.conf
 
-RUN chmod +x /usr/bin/subconverter && chmod +x /usr/lib/libmihomo.so
+RUN chmod +x /usr/bin/subconverter /usr/bin/mihomo_helper
 
 ENV TZ=Asia/Shanghai
-ENV LD_LIBRARY_PATH="/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu:/lib64:/usr/lib"
 RUN ln -sf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 WORKDIR /base
@@ -198,15 +159,6 @@ RUN set -e && \
     printf '%s\n' \
       '#!/bin/sh' \
       'set -e' \
-      'ARCH="$(uname -m)"' \
-      'case "$ARCH" in' \
-      '  x86_64) LIB_ARCH="x86_64-linux-gnu" ;;' \
-      '  aarch64|arm64) LIB_ARCH="aarch64-linux-gnu" ;;' \
-      '  *) LIB_ARCH="" ;;' \
-      'esac' \
-      'if [ -n "$LIB_ARCH" ]; then' \
-      '  export LD_LIBRARY_PATH="/lib/${LIB_ARCH}:/usr/lib/${LIB_ARCH}:/lib64:/usr/lib"' \
-      'fi' \
       'CONF="${PREF_PATH:-/base/pref.toml}"' \
       'CONF_DIR="$(dirname "$CONF")"' \
       'mkdir -p "$CONF_DIR"' \

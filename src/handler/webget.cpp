@@ -314,6 +314,14 @@ static std::string dataGet(const std::string &url)
 
     std::string data = urlDecode(url.substr(comma + 1));
     if (endsWith(url.substr(0, comma), ";base64")) {
+        // Restore '+' characters that urlDecode converted to spaces
+        // base64 uses '+' as a valid character; data: URLs use percent-encoding,
+        // not form-urlencoded, so '+' should be preserved
+        std::string original_data = url.substr(comma + 1);
+        for (size_t i = 0; i < data.size() && i < original_data.size(); i++) {
+            if (original_data[i] == '+')
+                data[i] = '+';
+        }
         return urlSafeBase64Decode(data);
     } else {
         return data;

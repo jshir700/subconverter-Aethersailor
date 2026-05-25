@@ -1,6 +1,8 @@
 #include "mihomo_bridge.h"
 #include <nlohmann/json.hpp>
 #include <cstdio>
+#include <functional>
+#include <sys/wait.h>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -24,39 +26,49 @@ std::string ProxyNode::toYAML() const {
 std::vector<ProxyNode> parseSubscription(const std::string &subscription) {
   std::vector<ProxyNode> nodes;
 
-  // Call mihomo_helper subprocess via pipe
-  std::string cmd = "mihomo_helper";
-  FILE *pipe = popen(cmd.c_str(), "rwe");
+  // Write subscription to a temp file for the helper to read
+  std::string tmpfile = "/tmp/mihomo_sub_" + std::to_string(std::hash<std::string>{}(subscription));
+  {
+    FILE *tf = fopen(tmpfile.c_str(), "we");
+    if (tf) {
+      fwrite(subscription.data(), 1, subscription.size(), tf);
+      fclose(tf);
+    }
+  }
+
+  // Call mihomo_helper subprocess via pipe, feeding stdin from temp file and capturing stderr
+  std::string cmd = "mihomo_helper < " + tmpfile + " 2>&1";
+  FILE *pipe = popen(cmd.c_str(), "r");
   if (!pipe) {
     // Fallback: try relative path
-    pipe = popen("./mihomo_helper", "rwe");
+    cmd = "./mihomo_helper < " + tmpfile + " 2>&1";
+    pipe = popen(cmd.c_str(), "r");
   }
   if (!pipe) {
     throw std::runtime_error("Failed to start mihomo_helper process");
   }
 
-  // Write subscription data to stdin
-  fwrite(subscription.data(), 1, subscription.size(), pipe);
-  fflush(pipe);
-
-  // Read JSON result from stdout
+  // Read result from stdout (includes stderr due to 2>&1)
   std::string result;
   char buffer[4096];
   while (fgets(buffer, sizeof(buffer), pipe)) {
     result += buffer;
   }
 
-  int exit_code = pclose(pipe);
-  if (exit_code != 0 || result.empty()) {
-    throw std::runtime_error("Mihomo parser error: helper process failed with exit code " +
-                             std::to_string(exit_code));
+  int raw_status = pclose(pipe);
+  int exit_code = WIFEXITED(raw_status) ? WEXITSTATUS(raw_status) : -1;
+
+  // Clean up temp file
+  remove(tmpfile.c_str());
+
+  // Parse output: mihomo_helper outputs JSON array on success, {"error":"..."} on failure
+  if (result.empty()) {
+    throw std::runtime_error("Mihomo parser error: no output from helper process (exit code " +
+                             std::to_string(exit_code) + ")");
   }
 
-  // Parse JSON result
   try {
     auto json_result = nlohmann::json::parse(result);
-
-    // Check for error
     if (json_result.contains("error")) {
       throw std::runtime_error("Mihomo parser error: " + json_result["error"].get<std::string>());
     }
@@ -107,8 +119,14 @@ std::vector<ProxyNode> parseSubscription(const std::string &subscription) {
       nodes.push_back(node);
     }
 
-  } catch (const nlohmann::json::exception &e) {
-    throw std::runtime_error(std::string("JSON parse error: ") + e.what());
+    return nodes;
+
+  } catch (const nlohmann::json::exception &) {
+    if (exit_code != 0) {
+      throw std::runtime_error("Mihomo parser error: helper process failed with exit code " +
+                               std::to_string(exit_code) + ", output: " + result);
+    }
+    throw std::runtime_error("Mihomo parser error: invalid JSON output: " + result);
   }
 
   return nodes;
@@ -116,7 +134,7 @@ std::vector<ProxyNode> parseSubscription(const std::string &subscription) {
 
 bool isMihomoParserAvailable() {
   // Check if helper binary exists
-  FILE *pipe = popen("command -v mihomo_helper 2>/dev/null || echo ''", "re");
+  FILE *pipe = popen("command -v mihomo_helper 2>/dev/null || echo ''", "r");
   if (pipe) {
     char buf[256] = {};
     fgets(buf, sizeof(buf), pipe);

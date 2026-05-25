@@ -2,7 +2,9 @@
 #include <nlohmann/json.hpp>
 #include <cstdio>
 #include <functional>
+#ifndef _WIN32
 #include <sys/wait.h>
+#endif
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -56,7 +58,11 @@ std::vector<ProxyNode> parseSubscription(const std::string &subscription) {
   }
 
   int raw_status = pclose(pipe);
+#ifdef _WIN32
+  int exit_code = raw_status; // _pclose returns exit code directly on Windows
+#else
   int exit_code = WIFEXITED(raw_status) ? WEXITSTATUS(raw_status) : -1;
+#endif
 
   // Clean up temp file
   remove(tmpfile.c_str());

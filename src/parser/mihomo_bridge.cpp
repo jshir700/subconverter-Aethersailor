@@ -1,15 +1,9 @@
 #include "mihomo_bridge.h"
 #include <nlohmann/json.hpp>
+#include <cstdio>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
-
-#ifdef USE_MIHOMO_PARSER
-// Go library functions (generated from libconvert.h)
-extern "C" {
-char *ConvertSubscription(char *data);
-void FreeString(char *s);
-}
-#endif
 
 namespace mihomo {
 
@@ -20,7 +14,6 @@ std::string ProxyNode::toYAML() const {
   ss << "    server: " << server << "\n";
   ss << "    port: " << port << "\n";
 
-  // Add other parameters
   for (const auto &[key, value] : params) {
     ss << "    " << key << ": " << value << "\n";
   }
@@ -29,13 +22,34 @@ std::string ProxyNode::toYAML() const {
 }
 
 std::vector<ProxyNode> parseSubscription(const std::string &subscription) {
-#ifdef USE_MIHOMO_PARSER
   std::vector<ProxyNode> nodes;
 
-  // Call Go function
-  char *result = ConvertSubscription(const_cast<char *>(subscription.c_str()));
-  if (!result) {
-    throw std::runtime_error("Failed to call Go ConvertSubscription function");
+  // Call mihomo_helper subprocess via pipe
+  std::string cmd = "mihomo_helper";
+  FILE *pipe = popen(cmd.c_str(), "rwe");
+  if (!pipe) {
+    // Fallback: try relative path
+    pipe = popen("./mihomo_helper", "rwe");
+  }
+  if (!pipe) {
+    throw std::runtime_error("Failed to start mihomo_helper process");
+  }
+
+  // Write subscription data to stdin
+  fwrite(subscription.data(), 1, subscription.size(), pipe);
+  fflush(pipe);
+
+  // Read JSON result from stdout
+  std::string result;
+  char buffer[4096];
+  while (fgets(buffer, sizeof(buffer), pipe)) {
+    result += buffer;
+  }
+
+  int exit_code = pclose(pipe);
+  if (exit_code != 0 || result.empty()) {
+    throw std::runtime_error("Mihomo parser error: helper process failed with exit code " +
+                             std::to_string(exit_code));
   }
 
   // Parse JSON result
@@ -44,9 +58,7 @@ std::vector<ProxyNode> parseSubscription(const std::string &subscription) {
 
     // Check for error
     if (json_result.contains("error")) {
-      std::string error = json_result["error"];
-      FreeString(result);
-      throw std::runtime_error("Mihomo parser error: " + error);
+      throw std::runtime_error("Mihomo parser error: " + json_result["error"].get<std::string>());
     }
 
     // Parse proxy array
@@ -56,7 +68,6 @@ std::vector<ProxyNode> parseSubscription(const std::string &subscription) {
       node.type = item.value("type", "");
       node.server = item.value("server", "");
 
-      // Port: handle both number and string
       if (item.contains("port")) {
         if (item["port"].is_number()) {
           node.port = item["port"].get<int>();
@@ -73,7 +84,6 @@ std::vector<ProxyNode> parseSubscription(const std::string &subscription) {
         node.port = 0;
       }
 
-      // Store all other fields in params
       for (auto it = item.begin(); it != item.end(); ++it) {
         const std::string &key = it.key();
         if (key != "name" && key != "type" && key != "server" &&
@@ -88,7 +98,7 @@ std::vector<ProxyNode> parseSubscription(const std::string &subscription) {
           } else if (it->is_boolean()) {
             value = it->get<bool>() ? "true" : "false";
           } else {
-            value = it->dump(); // For complex types, serialize to JSON
+            value = it->dump();
           }
           node.params[key] = value;
         }
@@ -98,25 +108,23 @@ std::vector<ProxyNode> parseSubscription(const std::string &subscription) {
     }
 
   } catch (const nlohmann::json::exception &e) {
-    FreeString(result);
     throw std::runtime_error(std::string("JSON parse error: ") + e.what());
   }
 
-  // Free Go-allocated memory
-  FreeString(result);
-
   return nodes;
-#else
-  throw std::runtime_error("Mihomo parser not available: USE_MIHOMO_PARSER not defined");
-#endif
 }
 
 bool isMihomoParserAvailable() {
-#ifdef USE_MIHOMO_PARSER
-  return true;
-#else
+  // Check if helper binary exists
+  FILE *pipe = popen("command -v mihomo_helper 2>/dev/null || echo ''", "re");
+  if (pipe) {
+    char buf[256] = {};
+    fgets(buf, sizeof(buf), pipe);
+    pclose(pipe);
+    if (buf[0] != '\0')
+      return true;
+  }
   return false;
-#endif
 }
 
 } // namespace mihomo

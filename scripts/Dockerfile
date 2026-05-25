@@ -1,7 +1,16 @@
-FROM alpine:3.16 AS builder
+FROM golang:alpine AS go-builder
+ARG SHA=""
+ENV GOTOOLCHAIN=local
+COPY . /subconverter
+WORKDIR /subconverter
+RUN if [ -n "$SHA" ]; then sed -i 's/\(v[0-9]\.[0-9]\.[0-9]\)/\1-'"$SHA"'/' src/version.h; fi
+WORKDIR /subconverter/bridge
+RUN go mod tidy && \
+    go build -v -ldflags="-s -w" -o mihomo_helper mihomo_helper.go
+
+FROM alpine:latest AS builder
 LABEL maintainer="jshir700@users.noreply.github.com"
 ARG THREADS="4"
-ARG SHA=""
 
 # build minimized
 WORKDIR /
@@ -33,24 +42,25 @@ RUN set -xe && \
     git clone https://github.com/ToruNiina/toml11 --branch="v4.3.0" --depth=1 && \
     cd toml11 && \
     cmake -DCMAKE_CXX_STANDARD=11 . && \
-    make install -j $THREADS && \
-    cd .. && \
-    git clone https://github.com/jshir700/subconverter-aethersailor --depth=1 subconverter && \
-    cd subconverter && \
-    [ -n "$SHA" ] && sed -i 's/\(v[0-9]\.[0-9]\.[0-9]\)/\1-'"$SHA"'/' src/version.h;\
-    python3 -m ensurepip && \
-    python3 -m pip install gitpython && \
+    make install -j $THREADS
+
+# Copy subconverter source with pre-built Go helper
+COPY --from=go-builder /subconverter /subconverter
+WORKDIR /subconverter
+RUN apk add --no-cache py3-pip && \
+    python3 -m pip install --break-system-packages gitpython && \
     python3 scripts/update_rules.py -c scripts/rules_config.conf && \
     cmake -DCMAKE_BUILD_TYPE=Release . && \
     make -j $THREADS
 
 # build final image
-FROM alpine:3.16
+FROM alpine:latest
 LABEL maintainer="metacubex.official@gmail.com"
 
 RUN apk add --no-cache --virtual subconverter-deps pcre2 libcurl yaml-cpp
 
 COPY --from=builder /subconverter/subconverter /usr/bin/
+COPY --from=builder /subconverter/bridge/mihomo_helper /usr/bin/
 COPY --from=builder /subconverter/base /base/
 
 ENV TZ=Africa/Abidjan
@@ -59,6 +69,6 @@ RUN echo $TZ > /etc/timezone
 
 # set entry
 WORKDIR /base
-CMD subconverter
+CMD ["subconverter"]
 
 EXPOSE 25500/tcp

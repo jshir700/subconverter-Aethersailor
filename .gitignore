@@ -4,3 +4,7 @@ cmake-build-debug
 .idea
 base/cache
 build
+bridge/libmihomo.a
+bridge/libmihomo.h
+bridge/libmihomo.so
+bridge/mihomo_helper

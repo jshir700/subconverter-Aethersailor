@@ -127,7 +127,7 @@ RUN set -xe && \
     ninja -j ${THREADS}
 
 # ========== FINAL STAGE ==========
-FROM alpine:latest
+FROM debian:trixie-slim
 
 ARG VERSION="dev"
 ARG SHA=""
@@ -143,7 +143,10 @@ LABEL \
   org.opencontainers.image.created="${BUILD_DATE}" \
   maintainer="jshir700"
 
-RUN apk add --no-cache ca-certificates
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    ca-certificates libcurl4t64 libpcre2-8-0 libyaml-cpp0.8 libstdc++6 && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /src/subconverter /usr/bin/subconverter
 COPY --from=builder /usr/bin/mihomo_helper /usr/bin/mihomo_helper
